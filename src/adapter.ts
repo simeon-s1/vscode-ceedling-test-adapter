@@ -66,6 +66,7 @@ export class CeedlingAdapter implements TestAdapter {
 
     private ceedlingProcess: child_process.ChildProcess | undefined;
     private debugTestExecutable: string = '';
+    private debugTestExecutableAbsPath: string = '';
 
     //mapped to the project path
     private functionRegexps: Record<string, RegExp | undefined> = {};
@@ -128,7 +129,7 @@ export class CeedlingAdapter implements TestAdapter {
             }
         });
         this.disposables.push(this.debugSessionDisposable);
-	
+
         // callback receive when a config property is modified
         vscode.workspace.onDidChangeConfiguration(event => {
             if (event.affectsConfiguration("ceedlingExplorer.problemMatching")) {
@@ -244,9 +245,15 @@ export class CeedlingAdapter implements TestAdapter {
 
     async debug(tests: string[]): Promise<void> {
         try {
-
             // Ceedling always run the whole file and so run the top test suite
-            tests = tests.map((x) => x.replace(/::.*/, ''));
+            tests = tests.map((x) => {
+                const parts = x.split('::');
+                if (parts.length > 2) {
+                    parts.pop();
+                    return parts.join('::');
+                }
+                return x;
+            });
 
             // Determine test suite to run
             const testSuites = this.getTestSuitesFromTestIds(tests);
@@ -289,6 +296,9 @@ export class CeedlingAdapter implements TestAdapter {
             } else {
                 this.setDebugTestExecutable(`${testFileName}${ext}`);
             }
+
+            this.setDebugTestExecutableAbsPath(path.resolve(this.projectData[projectKey].absPath, this.getBuildDirectory(projectKey), "test","out", this.getDebugTestExecutable()));
+
 
             // trigger testsuite start event
             this.testStatesEmitter.fire({
@@ -360,6 +370,7 @@ export class CeedlingAdapter implements TestAdapter {
         } finally {
             // Reset current test executable
             this.setDebugTestExecutable("");
+            this.setDebugTestExecutableAbsPath("");
             this.isCanceled = false;
         }
     }
@@ -371,6 +382,15 @@ export class CeedlingAdapter implements TestAdapter {
     setDebugTestExecutable(path: string) {
         this.debugTestExecutable = path;
         this.logger.info(`Set the debugTestExecutable to ${this.debugTestExecutable}`);
+    }
+
+    getDebugTestExecutableAbsPath(): string {
+        return this.debugTestExecutableAbsPath;
+    }
+
+    setDebugTestExecutableAbsPath(path: string) {
+        this.debugTestExecutableAbsPath = path;
+        this.logger.info(`Set the debugTestExecutableAbsPath to ${this.debugTestExecutableAbsPath}`);
     }
 
     async clean(): Promise<void> {
@@ -494,7 +514,7 @@ export class CeedlingAdapter implements TestAdapter {
 
     private getShellPath(): string | undefined {
         const shellPath = this.getConfiguration().get<string>('shellPath', 'null');
-        return shellPath !== "null" ? shellPath : undefined;
+        return shellPath !== "null" ? shellPath.replace(/^\.\//, this.workspaceFolder.uri.fsPath + path.sep) : undefined;
     }
 
     private getProjectKeys(): string[] {
@@ -505,7 +525,7 @@ export class CeedlingAdapter implements TestAdapter {
     }
 
     private loadProjectPaths() {
-        const projectConfigs = this.getConfiguration().get<object>('projects', []) as Array<ProjectConfig>;
+        const projectConfigs = this.getConfiguration().get<Array<ProjectConfig>>('projects', []);
         this.projectData = {};
         let workspacePath = this.workspaceFolder.uri.fsPath;
         projectConfigs.forEach(projectConfig => {
@@ -752,6 +772,10 @@ export class CeedlingAdapter implements TestAdapter {
         this.buildDirectories[projectKey] = buildDirectory;
     }
 
+    private getBuildDirectory(projectKey: string): string {
+        return this.buildDirectories[projectKey]
+    }
+
     private setXmlReportPath(projectKey: string, ymlProjectData: any = undefined) {
         let reportFilename = 'report.xml';
         if (this.isOldCeedlingVersion) {
@@ -921,7 +945,7 @@ export class CeedlingAdapter implements TestAdapter {
             const fileLabel = this.setFileLabel(projectKey, file);
             const currentTestSuiteInfo: ExtendedTestSuiteInfo = {
                 type: 'suite',
-                id: file,
+                id: `${projectKey}::${file}`,
                 label: fileLabel,
                 file: fullPath,
                 children: [],
@@ -940,7 +964,7 @@ export class CeedlingAdapter implements TestAdapter {
                 if (testCases.length > 0) {
                     const testSuiteInfo: ExtendedTestSuiteInfo = {
                         type: 'suite',
-                        id: `${file}::${testName}`,
+                        id: `${projectKey}::${file}::${testName}`,
                         label: testLabel,
                         file: fullPath,
                         children: [],
@@ -950,7 +974,7 @@ export class CeedlingAdapter implements TestAdapter {
                     for (const testCase of testCases) {
                         const testInfo: ExtendedTestInfo = {
                             type: 'test',
-                            id: `${file}::${testName}(${testCase.args})`,
+                            id: `${projectKey}::${file}::${testName}(${testCase.args})`,
                             label: testCase.args,
                             file: fullPath,
                             line: line + testCase.line,
@@ -962,7 +986,7 @@ export class CeedlingAdapter implements TestAdapter {
                 } else {
                     const testInfo: ExtendedTestInfo = {
                         type: 'test',
-                        id: `${file}::${testName}`,
+                        id: `${projectKey}::${file}::${testName}`,
                         label: testLabel,
                         file: fullPath,
                         line: line,
@@ -1231,9 +1255,9 @@ export class CeedlingAdapter implements TestAdapter {
             } else {
                 /* Send the events from the xml report data */
                 for (const ignoredTest of this.getTestListDataFromXmlReport(xmlReportData, "IgnoredTests")) {
-                    this.testStatesEmitter.fire({
+                     this.testStatesEmitter.fire({
                         type: 'test',
-                        test: ignoredTest["Name"],
+                        test: `${testSuite.projectKey}::${ignoredTest["Name"]}`,
                         state: 'skipped',
                         message: message
                     } as TestEvent);
@@ -1241,7 +1265,7 @@ export class CeedlingAdapter implements TestAdapter {
                 for (const succefullTest of this.getTestListDataFromXmlReport(xmlReportData, "SuccessfulTests")) {
                     this.testStatesEmitter.fire({
                         type: 'test',
-                        test: succefullTest["Name"],
+                        test: `${testSuite.projectKey}::${succefullTest["Name"]}`,
                         state: 'passed',
                         message: message
                     } as TestEvent);
@@ -1249,7 +1273,7 @@ export class CeedlingAdapter implements TestAdapter {
                 for (const failedTest of this.getTestListDataFromXmlReport(xmlReportData, "FailedTests")) {
                     this.testStatesEmitter.fire({
                         type: 'test',
-                        test: failedTest["Name"],
+                        test: `${testSuite.projectKey}::${failedTest["Name"]}`,
                         state: 'failed',
                         message: message,
                         decorations: [{
@@ -1265,4 +1289,3 @@ export class CeedlingAdapter implements TestAdapter {
         this.testStatesEmitter.fire({ type: 'suite', suite: testSuite, state: 'completed' } as TestSuiteEvent);
     }
 }
-

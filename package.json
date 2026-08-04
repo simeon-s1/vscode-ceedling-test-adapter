@@ -86,6 +86,7 @@
         "ceedlingExplorer.projects": {
           "description": "Path to the Ceedling project directories or yml files if not 'project.yml'",
           "type": "array",
+          "scope": "resource",
           "items": {
             "type": "object",
             "properties": {
@@ -112,8 +113,7 @@
                 "path": ".",
                 "debugLaunchConfig": "null"
               }
-            ],
-            "scope": "resource"
+            ]
           }
         },
         "ceedlingExplorer.shellPath": {
